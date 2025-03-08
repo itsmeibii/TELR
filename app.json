@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "FLBA",
+    "slug": "FLBA",
+    "version": "1.0.0",
+    "ios": {
+      "bundleIdentifier": "com.ibrahim.FLBA"
+    },
+    "android": {
+      "package": "com.ibrahim.FLBA"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/logo_trans.png",
+          "backgroundColor": "#EDBB68",
+          "imageResizeMode": "contain",
+          "imageWidth": 200
+        }
+      ]
+    ],
+    "splash": {
+      "image": "./assets/logo_trans.png",
+      "backgroundColor": "#EDBB68",
+      "resizeMode": "contain"
+    }
+  }
+}
