@@ -10,9 +10,12 @@ import {
     updateDoc,
     deleteDoc,
     collection,
-    serverTimestamp
+    serverTimestamp,
+    query,
+    where,
+    addDoc
   } from "firebase/firestore";
-  import { initializeAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, getReactNativePersistence } from 'firebase/auth';
+  import { initializeAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, getReactNativePersistence, getAuth } from 'firebase/auth';
   import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
   import {Alert} from 'react-native';
 
@@ -36,13 +39,11 @@ const app = initializeApp(firebaseConfig);
 
 const db = getFirestore(app);
 let auth;
-try {
-  auth = getAuth(app);
-} catch (error) {
+
   auth = initializeAuth(app, {
     persistence: getReactNativePersistence(ReactNativeAsyncStorage)
   });
-}
+
 export {auth};
 // Helper functions for Firestore
 
@@ -386,11 +387,25 @@ export const getGoals = async () => {
     try {
       const goalsRef = collection(db, "goals"); // Changed from "budget/goals" to "goals"
       const docRef = doc(goalsRef);
+      
+      const user = auth.currentUser;
+      if (!user) throw new Error("User not authenticated");
+      
       await setDoc(docRef, {
         ...goal,
         id: docRef.id,
         currentAmount: 0,
         createdAt: serverTimestamp(),
+        ownerId: user.uid,
+        participants: [
+          {
+            userId: user.uid,
+            email: user.email,
+            currentAmount: 0, 
+            completed: false
+          }
+        ],
+        isShared: false
       });
       return docRef.id;
     } catch (error) {
@@ -400,10 +415,193 @@ export const getGoals = async () => {
 
   export const updateGoal = async (goalId, amount) => {
     try {
-      const goalRef = doc(db, "goals", goalId); // Changed path
-      await updateDoc(goalRef, { currentAmount: amount });
+      const goalRef = doc(db, "goals", goalId);
+      const goalDoc = await getDoc(goalRef);
+      
+      if (!goalDoc.exists()) {
+        throw new Error("Goal not found");
+      }
+      
+      const goalData = goalDoc.data();
+      const user = auth.currentUser;
+      
+      if (!user) throw new Error("User not authenticated");
+      
+      if (goalData.isShared) {
+        // For shared goals, update the participant's amount
+        const updatedParticipants = goalData.participants.map(participant => {
+          if (participant.userId === user.uid) {
+            return {
+              ...participant,
+              currentAmount: amount,
+              completed: amount >= goalData.targetAmount,
+              completedAt: amount >= goalData.targetAmount ? serverTimestamp() : null
+            };
+          }
+          return participant;
+        });
+        
+        // Calculate total amount from all participants
+        const totalAmount = updatedParticipants.reduce((sum, participant) => 
+          sum + participant.currentAmount, 0);
+        
+        // Check if all participants have completed the goal
+        const allCompleted = updatedParticipants.every(p => p.completed);
+        
+        await updateDoc(goalRef, { 
+          participants: updatedParticipants,
+          currentAmount: totalAmount,
+          isCompleted: allCompleted,
+          lastUpdated: serverTimestamp()
+        });
+      } else {
+        // For individual goals, just update the amount
+        await updateDoc(goalRef, { 
+          currentAmount: amount,
+          isCompleted: amount >= goalData.targetAmount,
+          lastUpdated: serverTimestamp()
+        });
+      }
     } catch (error) {
       console.error("Error updating goal:", error);
+      throw error;
+    }
+  };
+  
+  // Share a goal with another user
+  export const shareGoal = async (goalId, recipientEmail) => {
+    try {
+      const goalRef = doc(db, "goals", goalId);
+      const goalDoc = await getDoc(goalRef);
+      
+      if (!goalDoc.exists()) {
+        throw new Error("Goal not found");
+      }
+      
+      const goalData = goalDoc.data();
+      const user = auth.currentUser;
+      
+      if (!user) throw new Error("User not authenticated");
+      
+      // Make sure the current user is the owner
+      if (goalData.ownerId !== user.uid) {
+        throw new Error("Only the goal owner can share it");
+      }
+      
+      // Check if the recipient is already a participant
+      if (goalData.participants.some(p => p.email === recipientEmail)) {
+        throw new Error("This user is already participating in the goal");
+      }
+      
+      // Find the user by email
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, where("email", "==", recipientEmail));
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        // User not found, create an invitation instead
+        const inviteRef = collection(db, "goalInvitations");
+        await addDoc(inviteRef, {
+          goalId: goalId,
+          goalName: goalData.name,
+          senderEmail: user.email,
+          recipientEmail: recipientEmail,
+          createdAt: serverTimestamp(),
+          status: "pending"
+        });
+        
+        return { success: true, message: "Invitation sent to " + recipientEmail };
+      }
+      
+      // Add the recipient to the participants
+      const recipientData = querySnapshot.docs[0].data();
+      const updatedParticipants = [...goalData.participants, {
+        userId: recipientData.uid,
+        email: recipientEmail,
+        currentAmount: 0,
+        completed: false
+      }];
+      
+      await updateDoc(goalRef, {
+        participants: updatedParticipants,
+        isShared: true,
+        lastUpdated: serverTimestamp()
+      });
+      
+      return { success: true, message: "Goal shared with " + recipientEmail };
+    } catch (error) {
+      console.error("Error sharing goal:", error);
+      return { success: false, message: error.message };
+    }
+  };
+  
+  // Get goal invitations for the current user
+  export const getGoalInvitations = async () => {
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("User not authenticated");
+      
+      const invitesRef = collection(db, "goalInvitations");
+      const q = query(invitesRef, where("recipientEmail", "==", user.email), where("status", "==", "pending"));
+      const querySnapshot = await getDocs(q);
+      
+      return querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+    } catch (error) {
+      console.error("Error getting invitations:", error);
+      return [];
+    }
+  };
+  
+  // Accept or decline a goal invitation
+  export const respondToGoalInvitation = async (invitationId, accept) => {
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("User not authenticated");
+      
+      const inviteRef = doc(db, "goalInvitations", invitationId);
+      const inviteDoc = await getDoc(inviteRef);
+      
+      if (!inviteDoc.exists()) {
+        throw new Error("Invitation not found");
+      }
+      
+      const inviteData = inviteDoc.data();
+      
+      // Update invitation status
+      await updateDoc(inviteRef, {
+        status: accept ? "accepted" : "declined",
+        respondedAt: serverTimestamp()
+      });
+      
+      if (accept) {
+        // Add the user to the goal participants
+        const goalRef = doc(db, "goals", inviteData.goalId);
+        const goalDoc = await getDoc(goalRef);
+        
+        if (goalDoc.exists()) {
+          const goalData = goalDoc.data();
+          const updatedParticipants = [...goalData.participants, {
+            userId: user.uid,
+            email: user.email,
+            currentAmount: 0,
+            completed: false
+          }];
+          
+          await updateDoc(goalRef, {
+            participants: updatedParticipants,
+            isShared: true,
+            lastUpdated: serverTimestamp()
+          });
+        }
+      }
+      
+      return { success: true };
+    } catch (error) {
+      console.error("Error responding to invitation:", error);
+      return { success: false, message: error.message };
     }
   };
 

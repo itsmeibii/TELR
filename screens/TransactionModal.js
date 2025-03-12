@@ -1,298 +1,459 @@
-import { StyleSheet, Text, TouchableOpacity, View, TextInput, FlatList } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View, TextInput, Modal, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import React, { useState, useEffect } from 'react';
-import { FontAwesome5, Foundation, Feather } from '@expo/vector-icons';
-import { VictoryLine, VictoryChart, VictoryAxis, VictoryArea, VictoryVoronoiContainer } from 'victory-native';
-import Transaction from '../components/Transaction';
+import { AntDesign, MaterialIcons } from '@expo/vector-icons';
 import { useFonts, Inter_400Regular, Inter_700Bold } from '@expo-google-fonts/inter';
 import { LinearGradient } from 'expo-linear-gradient';
-import { FilterModal, filterTransactions } from '../components/FilterModal';
-const generateForecastData = (transactions, daysToForecast = 7) => {
-  // Sort transactions by date
-  const sortedTransactions = [...transactions].sort((a, b) => 
-    new Date(a.date) - new Date(b.date)
-  );
+import DateTimePicker from '@react-native-community/datetimepicker';
+import PlaidButton from '../components/PlaidButton';
 
-  // Calculate daily balances
-  const balanceData = [];
-  let runningBalance = 0;
-  
-  sortedTransactions.forEach(transaction => {
-    runningBalance += transaction.amount;
-    balanceData.push({
-      date: new Date(transaction.date),
-      balance: runningBalance
-    });
-  });
-
-  // Calculate trend for forecast
-  const recentDays = 14; // Use last 14 days for trend calculation
-  const recentBalances = balanceData.slice(-recentDays);
-  
-  if (recentBalances.length < 2) return { historicalData: balanceData, forecastData: [] };
-
-  // Calculate average daily change
-  const dailyChanges = [];
-  for (let i = 1; i < recentBalances.length; i++) {
-    dailyChanges.push(recentBalances[i].balance - recentBalances[i-1].balance);
-  }
-  const avgDailyChange = dailyChanges.reduce((a, b) => a + b, 0) / dailyChanges.length;
-
-  // Generate forecast data
-  const forecastData = [];
-  const lastBalance = balanceData[balanceData.length - 1];
-  const lastDate = new Date(lastBalance.date);
-  
-  for (let i = 1; i <= daysToForecast; i++) {
-    const forecastDate = new Date(lastDate);
-    forecastDate.setDate(forecastDate.getDate() + i);
-    
-    forecastData.push({
-      date: forecastDate,
-      balance: lastBalance.balance + (avgDailyChange * i)
-    });
-  }
-
-  return { historicalData: balanceData, forecastData };
+// Color theme constants
+const COLORS = {
+  primary: '#EDBB68',
+  secondary: '#4A90E2',
+  accent: '#50C878',
+  background: '#F8F9FA',
+  text: '#2E3842',
+  lightText: '#6B7280',
+  success: '#16A34A',
+  error: '#DC2626',
+  white: '#FFFFFF',
+  border: '#E2E8F0',
 };
 
-const TransactionModal = ({ close, transactions, deleteTransaction, setTransactions, refresh }) => {
-  const [search, setSearch] = useState('');
-  const [filteredTransactions, setFilteredTransactions] = useState(transactions || []);
-  const [chartData, setChartData] = useState({ historicalData: [], forecastData: [] });
+// List of common transaction categories
+const CATEGORIES = [
+  'Food & Drink',
+  'Shopping',
+  'Housing',
+  'Transportation',
+  'Entertainment',
+  'Health',
+  'Education',
+  'Personal',
+  'Travel',
+  'Utilities',
+  'Income',
+  'Other'
+];
+
+const TransactionModal = ({ visible, onClose, addTransaction }) => {
+  // Form state
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [category, setCategory] = useState('');
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const [date, setDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [type, setType] = useState('expense'); // 'income' or 'expense'
+  const [errors, setErrors] = useState({});
+  
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_700Bold,
   });
-  const [focused, setIsFocused] = useState(false);
-  const [showFilterModal, setShowFilterModal] = useState(false);
-const [activeFilters, setActiveFilters] = useState({
-  type: 'all',
-  category: 'all',
-  startDate: null,
-  endDate: null,
-});
 
-const handleApplyFilters = (filters) => {
-  setActiveFilters(filters);
-  const filtered = filterTransactions(transactions, filters);
-  setFilteredTransactions(filtered);
-};
-useEffect(() => {
-  let filtered = transactions || [];
-  
-  // Apply filters first
-  filtered = filterTransactions(filtered, activeFilters);
-  
-  // Then apply search
-  if (search) {
-    filtered = filtered.filter((transaction) => {
-      if (!transaction) return false;
-
-      const searchableProps = [
-        transaction.name,
-        transaction.title,
-        transaction.category
-      ];
-
-      return searchableProps.some(prop =>
-        prop &&
-        typeof prop === 'string' &&
-        prop.toLowerCase().includes(search.toLowerCase())
-      );
-    });
-  }
-  
-  setFilteredTransactions(filtered);
-}, [search, transactions, activeFilters]);
-const categories = [...new Set(transactions.map(t => t.category))];
-  
+  // Reset form when modal is opened
   useEffect(() => {
-    if (transactions && transactions.length > 0) {
-      const { historicalData, forecastData } = generateForecastData(transactions);
-      setChartData({ historicalData, forecastData });
+    if (visible) {
+      resetForm();
     }
-  }, [transactions]);
+  }, [visible]);
 
-  useEffect(() => {
-    if (!search) {
-      setFilteredTransactions(transactions || []);
-      return;
-    }
+  // Reset form fields
+  const resetForm = () => {
+    setName('');
+    setAmount('');
+    setCategory('');
+    setDate(new Date());
+    setType('expense');
+    setErrors({});
+  };
 
-    const filtered = (transactions || []).filter((transaction) => {
-      if (!transaction) return false;
-
-      const searchableProps = [
-        transaction.name, 
-        transaction.title, 
-        transaction.category
-      ];
-
-      return searchableProps.some(prop => 
-        prop && 
-        typeof prop === 'string' && 
-        prop.toLowerCase().includes(search.toLowerCase())
-      );
-    });
+  // Form validation
+  const validateForm = () => {
+    const newErrors = {};
     
-    setFilteredTransactions(filtered);
-  }, [search, transactions]);
+    if (!name.trim()) newErrors.name = 'Name is required';
+    
+    if (!amount.trim()) {
+      newErrors.amount = 'Amount is required';
+    } else if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+      newErrors.amount = 'Amount must be a positive number';
+    }
+    
+    if (!category.trim()) newErrors.category = 'Category is required';
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
-  if (!fontsLoaded) {
+  // Handle form submission
+  const handleSubmit = () => {
+    if (validateForm()) {
+      // Format date as DD/MM/YY
+      const formattedDate = `${date.getDate().toString().padStart(2, '0')}/${
+        (date.getMonth() + 1).toString().padStart(2, '0')
+      }/${date.getFullYear().toString().slice(2)}`;
+      
+      // Create transaction object
+      const transaction = {
+        name,
+        amount: parseFloat(amount),
+        category,
+        date: formattedDate,
+        type,
+      };
+      
+      // Call the addTransaction function passed from props
+      addTransaction(transaction);
+      
+      // Reset form and close modal
+      resetForm();
+      onClose();
+    }
+  };
+
+  // Handle date change from picker
+  const onDateChange = (event, selectedDate) => {
+    const currentDate = selectedDate || date;
+    setShowDatePicker(Platform.OS === 'ios');
+    setDate(currentDate);
+  };
+
+  // Format date for display
+  const formatDateForDisplay = (date) => {
+    return `${date.getDate().toString().padStart(2, '0')}/${
+      (date.getMonth() + 1).toString().padStart(2, '0')
+    }/${date.getFullYear()}`;
+  };
+
+  if (!fontsLoaded || !visible) {
     return null;
   }
 
-  const bc = focused ? 'rgba(0,0,0,0.8)' : 'rgba(0,0,0,0.3)';
-
   return (
-    <View style={{ width: '100%', height: '100%', alignItems: 'center' }}>
-      <LinearGradient
-        colors={['rgba(129, 246, 129, 0.4)', '#ffffff', 'rgba(191, 103, 245, 0.1)']}
-        start={{ x: -2, y: -0.3 }}
-        end={{ x: 2, y: 1.9 }}
-        style={{ position: 'absolute', width: '100%', height: 1300, bottom: 10 }}
-      />
-      
-      {/* Title Section */}
-      <View style={styles.titleSection}>
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={styles.titleText}>My Transactions</Text>
-        </View>
-        <TouchableOpacity style={{ marginRight: 30 }} onPress={close}>
-          <FontAwesome5 name="times" size={20} color="rgba(0,0,0,0.8)" />
-        </TouchableOpacity>
-      </View>
-
-    
-
-      {/* Search Section */}
-      <View style={styles.searchSection}>
-        <View style={[styles.searchBar, { borderColor: bc }]}>
-          <Foundation
-            name="magnifying-glass"
-            size={20}
-            color="rgba(0,0,0,0.8)"
-            style={{ marginLeft: 15 }}
-          />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search Transactions..."
-            value={search}
-            onChangeText={setSearch}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-          />
-        </View>
-        <TouchableOpacity
-  style={[
-    styles.filterButton,
-    Object.values(activeFilters).some(v => v !== 'all' && v !== null) && {
-      backgroundColor: '#007AFF',
-      borderColor: '#007AFF',
-    },
-  ]}
-  onPress={() => setShowFilterModal(true)}
->
-  <Feather
-    name="filter"
-    size={20}
-    color={Object.values(activeFilters).some(v => v !== 'all' && v !== null)
-      ? 'white'
-      : 'black'}
-  />
-</TouchableOpacity>
-      </View>
-
-      {/* Transaction List */}
-      <View style={styles.transactionList}>
-        <FlatList
-          data={filteredTransactions}
-          renderItem={({ item, index }) => (
-            <Transaction 
-              item={item} 
-              index={index} 
-              deleteTransaction={deleteTransaction} 
-              key={item.id}
-              refresh = {refresh}
-            />
-          )}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{
-            paddingVertical: 10,
-            width: '100%',
-            alignItems: 'center',
-          }}
-          showsVerticalScrollIndicator={false}
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent={false}
+      onRequestClose={onClose}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.container}
+      >
+        <LinearGradient
+          colors={[COLORS.background, COLORS.white, COLORS.background]}
+          style={styles.gradient}
         />
-      </View>
-      <FilterModal
-  visible={showFilterModal}
-  onClose={() => setShowFilterModal(false)}
-  onApplyFilters={handleApplyFilters}
-  categories={categories}
-/>
-    </View>
+        
+        {/* Header with title and close button */}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Add Transaction</Text>
+          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+            <AntDesign name="close" size={22} color={COLORS.text} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.formContainer}>
+          {/* Transaction Type Selection */}
+          <View style={styles.typeSelector}>
+            <TouchableOpacity
+              style={[styles.typeButton, type === 'expense' && styles.activeTypeButton]}
+              onPress={() => setType('expense')}
+            >
+              <MaterialIcons 
+                name="arrow-upward" 
+                size={20} 
+                color={type === 'expense' ? COLORS.white : COLORS.text} 
+              />
+              <Text style={[styles.typeText, type === 'expense' && styles.activeTypeText]}>
+                Expense
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.typeButton, type === 'income' && styles.activeIncomeButton]}
+              onPress={() => setType('income')}
+            >
+              <MaterialIcons 
+                name="arrow-downward" 
+                size={20} 
+                color={type === 'income' ? COLORS.white : COLORS.text} 
+              />
+              <Text style={[styles.typeText, type === 'income' && styles.activeTypeText]}>
+                Income
+              </Text>
+            </TouchableOpacity>
+          </View>
+          
+          {/* Transaction Name */}
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>Transaction Name</Text>
+            <TextInput
+              style={[styles.input, errors.name && styles.inputError]}
+              placeholder="e.g. Grocery shopping"
+              value={name}
+              onChangeText={setName}
+            />
+            {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
+          </View>
+          
+          {/* Amount */}
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>Amount ($)</Text>
+            <TextInput
+              style={[styles.input, errors.amount && styles.inputError]}
+              placeholder="0.00"
+              keyboardType="numeric"
+              value={amount}
+              onChangeText={setAmount}
+            />
+            {errors.amount && <Text style={styles.errorText}>{errors.amount}</Text>}
+          </View>
+          
+          {/* Category */}
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>Category</Text>
+            <TouchableOpacity
+              style={[styles.input, styles.dropdownInput, errors.category && styles.inputError]}
+              onPress={() => setShowCategoryDropdown(!showCategoryDropdown)}
+            >
+              <Text style={category ? styles.inputText : styles.placeholderText}>
+                {category || 'Select category'}
+              </Text>
+              <MaterialIcons
+                name={showCategoryDropdown ? 'arrow-drop-up' : 'arrow-drop-down'}
+                size={24}
+                color={COLORS.text}
+              />
+            </TouchableOpacity>
+            {errors.category && <Text style={styles.errorText}>{errors.category}</Text>}
+            
+            {showCategoryDropdown && (
+              <View style={styles.dropdown}>
+                <ScrollView nestedScrollEnabled={true} style={{ maxHeight: 150 }}>
+                  {CATEGORIES.map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={styles.dropdownItem}
+                      onPress={() => {
+                        setCategory(cat);
+                        setShowCategoryDropdown(false);
+                      }}
+                    >
+                      <Text style={styles.dropdownItemText}>{cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+          
+          {/* Date */}
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>Date</Text>
+            <TouchableOpacity
+              style={styles.input}
+              onPress={() => setShowDatePicker(true)}
+            >
+              <Text style={styles.inputText}>{formatDateForDisplay(date)}</Text>
+              <MaterialIcons name="date-range" size={24} color={COLORS.text} />
+            </TouchableOpacity>
+            
+            {showDatePicker && (
+              <DateTimePicker
+                value={date}
+                mode="date"
+                display="default"
+                onChange={onDateChange}
+              />
+            )}
+          </View>
+
+          {/* Connect Bank with Plaid */}
+          <View style={styles.plaidContainer}>
+            <Text style={styles.orText}>OR</Text>
+            <Text style={styles.plaidText}>Import transactions directly from your bank</Text>
+            <View style={styles.plaidButtonWrapper}>
+              <PlaidButton close={onClose} onPlaidSuccess={addTransaction} />
+            </View>
+          </View>
+          
+          {/* Submit Button */}
+          <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
+            <Text style={styles.submitButtonText}>Add Transaction</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  titleSection: {
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  gradient: {
+    position: 'absolute',
     width: '100%',
-    height: '10%',
+    height: '100%',
+  },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    paddingBottom: 15,
+    backgroundColor: COLORS.white,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
   },
-  titleText: {
-    fontSize: 25,
-    fontWeight: 'bold',
-    color: 'rgba(0,0,0,0.8)',
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: COLORS.text,
     fontFamily: 'Inter_700Bold',
   },
-  chartSection: {
-    width: '100%',
-    height: 200,
-    paddingHorizontal: 10,
+  closeButton: {
+    position: 'absolute',
+    right: 20,
+    top: Platform.OS === 'ios' ? 50 : 20,
+    padding: 5,
+  },
+  formContainer: {
+    padding: 20,
+  },
+  typeSelector: {
+    flexDirection: 'row',
+    marginBottom: 20,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  typeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    backgroundColor: COLORS.white,
+  },
+  activeTypeButton: {
+    backgroundColor: COLORS.error,
+  },
+  activeIncomeButton: {
+    backgroundColor: COLORS.success,
+  },
+  typeText: {
+    marginLeft: 5,
+    fontSize: 16,
+    fontWeight: '500',
+    color: COLORS.text,
+  },
+  activeTypeText: {
+    color: COLORS.white,
+  },
+  formGroup: {
     marginBottom: 20,
   },
-  searchSection: {
-    width: '90%',
-    height: '5%',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginHorizontal: 10,
-  },
-  searchBar: {
-    width: '85%',
-    height: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 15,
-    backgroundColor: 'rgba(255,255,255,0.8)',
-  },
-  searchInput: {
+  label: {
     fontSize: 16,
-    color: 'rgba(0,0,0,0.8)',
-    marginLeft: 15,
-    flex: 1,
+    fontWeight: '500',
+    marginBottom: 8,
+    color: COLORS.text,
   },
-  filterButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
+  input: {
+    backgroundColor: COLORS.white,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.3)',
-    backgroundColor: 'rgba(255,255,255,0.8)',
-  },
-  transactionList: {
-    width: '100%',
-    height: '85%',
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    fontSize: 16,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  inputError: {
+    borderColor: COLORS.error,
+  },
+  errorText: {
+    color: COLORS.error,
+    fontSize: 14,
+    marginTop: 5,
+  },
+  dropdownInput: {
+    justifyContent: 'space-between',
+  },
+  inputText: {
+    fontSize: 16,
+    color: COLORS.text,
+  },
+  placeholderText: {
+    fontSize: 16,
+    color: '#9CA3AF',
+  },
+  dropdown: {
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    marginTop: 5,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  dropdownItem: {
+    paddingVertical: 12,
+    paddingHorizontal: 15,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.1)',
+    borderBottomColor: COLORS.border,
+  },
+  dropdownItemText: {
+    fontSize: 16,
+    color: COLORS.text,
+  },
+  plaidContainer: {
+    alignItems: 'center',
+    marginVertical: 20,
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: COLORS.border,
+  },
+  orText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: COLORS.lightText,
+    marginBottom: 10,
+  },
+  plaidText: {
+    fontSize: 14,
+    color: COLORS.text,
+    textAlign: 'center',
+    marginBottom: 15,
+  },
+  plaidButtonWrapper: {
+    alignItems: 'center',
+  },
+  submitButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 10,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginTop: 20,
+    marginBottom: 40,
+  },
+  submitButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 
